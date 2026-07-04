@@ -1,5 +1,5 @@
 import express from "express";
-import Conversation from "../models/Conversation.js";
+import { appendVoiceTranscript, getConversationIntake } from "../services/conversationStore.js";
 
 const router = express.Router();
 
@@ -9,8 +9,7 @@ router.get("/config", async (req, res, next) => {
     let intake = {};
 
     if (conversationId) {
-      const conversation = await Conversation.findById(conversationId).select("intake");
-      intake = conversation?.intake || {};
+      intake = await getConversationIntake(conversationId);
     }
 
     res.json({
@@ -35,12 +34,7 @@ router.post("/webhook", async (req, res, next) => {
     const callId = call?.id || req.body?.callId;
 
     if (conversationId && transcript) {
-      await Conversation.findByIdAndUpdate(conversationId, {
-        $push: {
-          messages: { role: "assistant", content: `[Voice transcript] ${transcript}` },
-          ...(callId ? { vapiCallIds: callId } : {}),
-        },
-      });
+      await appendVoiceTranscript({ conversationId, transcript, callId });
     }
 
     res.json({ ok: true });

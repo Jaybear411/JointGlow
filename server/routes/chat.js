@@ -1,8 +1,8 @@
 import express from "express";
-import Conversation from "../models/Conversation.js";
 import { applyUserAnswerToMemory } from "../services/intakeMemory.js";
 import { buildGlowyInstructions } from "../services/glowyPrompt.js";
 import { createGlowyReply } from "../services/openaiClient.js";
+import { createConversation, getConversation, saveConversation } from "../services/conversationStore.js";
 
 const router = express.Router();
 
@@ -13,9 +13,9 @@ router.post("/", async (req, res, next) => {
       return res.status(400).json({ error: "message is required" });
     }
 
-    let conversation = conversationId ? await Conversation.findById(conversationId) : null;
+    let conversation = await getConversation(conversationId);
     if (!conversation) {
-      conversation = await Conversation.create({
+      conversation = await createConversation({
         source: "chat",
         messages: [{ role: "assistant", content: "Hi, I'm Glowy, what is your name?" }],
       });
@@ -33,7 +33,7 @@ router.post("/", async (req, res, next) => {
     const reply = await createGlowyReply({ instructions, messages: modelMessages });
 
     conversation.messages.push({ role: "assistant", content: reply });
-    await conversation.save();
+    await saveConversation(conversation);
 
     res.json({
       conversationId: conversation._id,
@@ -49,7 +49,7 @@ router.post("/", async (req, res, next) => {
 
 router.get("/:conversationId", async (req, res, next) => {
   try {
-    const conversation = await Conversation.findById(req.params.conversationId);
+    const conversation = await getConversation(req.params.conversationId);
     if (!conversation) return res.status(404).json({ error: "Conversation not found" });
 
     res.json({

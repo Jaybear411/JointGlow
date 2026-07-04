@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import "./styles.css";
 
@@ -188,6 +188,7 @@ function HomePage() {
 
 function HeroSection() {
   const [mode, setMode] = useState("hero");
+  const hasOpenedChat = useRef(false);
   const chat = useGlowyChat();
   const voice = useVapiVoice();
 
@@ -195,13 +196,24 @@ function HeroSection() {
     event.preventDefault();
     stopAmbientAudio();
     const sent = chat.sendHeroMessage();
-    if (sent) setMode("chat");
+    if (sent) {
+      if (!hasOpenedChat.current) {
+        window.scrollTo({ top: 0, behavior: "smooth" });
+        hasOpenedChat.current = true;
+      }
+      setMode("chat");
+    }
   }
 
   function startVoiceMode() {
     stopAmbientAudio();
     setMode("voice");
     voice.startVoice();
+  }
+
+  function closeVoiceMode() {
+    voice.stopVoice();
+    setMode("hero");
   }
 
   return (
@@ -241,7 +253,7 @@ function HeroSection() {
         onClose={() => setMode("hero")}
       />
 
-      <VoiceOverlay active={mode === "voice"} status={voice.status} onClose={() => setMode("hero")} />
+      <VoiceOverlay active={mode === "voice"} status={voice.status} onClose={closeVoiceMode} />
     </section>
   );
 }
@@ -398,18 +410,72 @@ function useGlowyChat() {
 
 function useVapiVoice() {
   const [status, setStatus] = useState("idle");
+  const vapiRef = useRef(null);
 
   async function startVoice() {
+    if (status === "connecting" || status === "listening" || status === "speaking") return;
+
     setStatus("connecting");
-    await placeholderVapiBridge();
-    setStatus("listening");
+    try {
+      const conversationId = localStorage.getItem("jointglowConversationId") || "";
+      const configResponse = await fetch(`/api/vapi/config${conversationId ? `?conversationId=${conversationId}` : ""}`);
+      const config = await configResponse.json().catch(() => ({}));
+
+      if (!configResponse.ok) {
+        throw new Error("Unable to load Vapi configuration.");
+      }
+
+      if (!config.publicKey || !config.assistantId) {
+        setStatus("not-configured");
+        return;
+      }
+
+      const { default: Vapi } = await import("@vapi-ai/web");
+      const vapi = new Vapi(config.publicKey);
+      vapiRef.current = vapi;
+
+      vapi.on("call-start", () => setStatus("listening"));
+      vapi.on("speech-start", () => setStatus("speaking"));
+      vapi.on("speech-end", () => setStatus("listening"));
+      vapi.on("call-end", () => {
+        vapiRef.current = null;
+        setStatus("ended");
+      });
+      vapi.on("error", () => {
+        vapiRef.current = null;
+        setStatus("error");
+      });
+
+      await vapi.start(config.assistantId, {
+        variableValues: {
+          ...(config.variableValues || {}),
+          conversationId: conversationId || "new",
+          firstQuestion: config.firstMessage || "Hi, I'm Glowy, what is your name?",
+        },
+      });
+    } catch (error) {
+      vapiRef.current = null;
+      setStatus("error");
+    }
   }
 
-  return { status, setStatus, startVoice };
-}
+  function stopVoice() {
+    if (vapiRef.current) {
+      vapiRef.current.stop();
+      vapiRef.current = null;
+    }
+    setStatus("ended");
+  }
 
-async function placeholderVapiBridge() {
-  await new Promise((resolve) => window.setTimeout(resolve, 700));
+  useEffect(() => {
+    return () => {
+      if (vapiRef.current) {
+        vapiRef.current.stop();
+      }
+    };
+  }, []);
+
+  return { status, startVoice, stopVoice };
 }
 
 function voiceStatusLabel(status) {
@@ -418,6 +484,9 @@ function voiceStatusLabel(status) {
     connecting: "Connecting",
     listening: "Listening",
     speaking: "Speaking",
+    ended: "Call ended",
+    error: "Voice unavailable",
+    "not-configured": "Add Vapi keys to enable voice",
   };
   return labels[status] || labels.idle;
 }

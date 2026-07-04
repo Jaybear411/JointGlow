@@ -5,6 +5,14 @@ export async function createGlowyReply({ instructions, messages }) {
     return fallbackReply(messages);
   }
 
+  const model = process.env.OPENAI_MODEL || "gpt-4.1-mini";
+  const modelOptions = model.startsWith("gpt-5")
+    ? {
+        reasoning: { effort: "low" },
+        text: { verbosity: "low" },
+      }
+    : {};
+
   const response = await fetch(OPENAI_RESPONSES_URL, {
     method: "POST",
     headers: {
@@ -12,7 +20,8 @@ export async function createGlowyReply({ instructions, messages }) {
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
-      model: process.env.OPENAI_MODEL || "gpt-4.1-mini",
+      model,
+      ...modelOptions,
       instructions,
       input: messages.map((message) => ({
         role: message.role,

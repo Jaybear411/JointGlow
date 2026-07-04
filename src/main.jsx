@@ -65,6 +65,13 @@ function useAmbientAudio() {
       play();
     };
 
+    const stop = () => {
+      cleanupUnlockListeners();
+      audio.pause();
+      audio.currentTime = 0;
+      unlocked = true;
+    };
+
     const addUnlockListeners = () => {
       window.addEventListener("pointerdown", unlock, { once: true });
       window.addEventListener("keydown", unlock, { once: true });
@@ -78,13 +85,19 @@ function useAmbientAudio() {
     };
 
     play();
+    window.addEventListener("jointglow:stop-ambient-audio", stop);
 
     return () => {
       cleanupUnlockListeners();
+      window.removeEventListener("jointglow:stop-ambient-audio", stop);
       audio.pause();
       audio.src = "";
     };
   }, []);
+}
+
+function stopAmbientAudio() {
+  window.dispatchEvent(new Event("jointglow:stop-ambient-audio"));
 }
 
 function Header() {
@@ -180,11 +193,13 @@ function HeroSection() {
 
   function submitHeroMessage(event) {
     event.preventDefault();
+    stopAmbientAudio();
     const sent = chat.sendHeroMessage();
     if (sent) setMode("chat");
   }
 
   function startVoiceMode() {
+    stopAmbientAudio();
     setMode("voice");
     voice.startVoice();
   }
@@ -322,6 +337,7 @@ function EarIcon() {
 }
 
 function useGlowyChat() {
+  const [conversationId, setConversationId] = useState(() => localStorage.getItem("jointglowConversationId") || "");
   const [draft, setDraft] = useState("");
   const [messages, setMessages] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -332,34 +348,52 @@ function useGlowyChat() {
     if (!trimmed || loading) return false;
 
     const userMessage = { role: "user", content: trimmed };
-    setMessages((current) => [...current, userMessage]);
+    const nextMessages = [...messages, userMessage];
+    setMessages(nextMessages);
     setDraft("");
     setTypedResponse("");
     setLoading(true);
 
-    const response = getPlaceholderGlowyReply(trimmed);
-    window.setTimeout(() => {
-      let index = 0;
-      setLoading(false);
-      const timer = window.setInterval(() => {
-        index += 1;
-        setTypedResponse(response.slice(0, index));
-        if (index >= response.length) {
-          window.clearInterval(timer);
-          setMessages((current) => [...current, { role: "assistant", content: response }]);
-          setTypedResponse("");
+    fetch("/api/chat", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ conversationId, message: trimmed }),
+    })
+      .then(async (response) => {
+        const data = await response.json().catch(() => ({}));
+        if (!response.ok) {
+          throw new Error(data.error || "Unable to reach Glowy.");
         }
-      }, 22);
-    }, 520);
+
+        if (data.conversationId && data.conversationId !== conversationId) {
+          setConversationId(data.conversationId);
+          localStorage.setItem("jointglowConversationId", data.conversationId);
+        }
+
+        typeAssistantReply(data.reply || "Thank you. Tell me a little more.", nextMessages);
+      })
+      .catch((error) => {
+        typeAssistantReply(error.message || "I could not connect just now. Please try again in a moment.", nextMessages);
+      });
 
     return true;
   }
 
-  return { draft, setDraft, messages, loading, typedResponse, sendHeroMessage };
-}
+  function typeAssistantReply(response, nextMessages) {
+    let index = 0;
+    setLoading(false);
+    const timer = window.setInterval(() => {
+      index += 1;
+      setTypedResponse(response.slice(0, index));
+      if (index >= response.length) {
+        window.clearInterval(timer);
+        setMessages([...nextMessages, { role: "assistant", content: response }]);
+        setTypedResponse("");
+      }
+    }, 18);
+  }
 
-function getPlaceholderGlowyReply() {
-  return "Thanks for sharing that. I can help you understand possible causes, treatment paths, and whether a consultation may be the right next step.";
+  return { draft, setDraft, messages, loading, typedResponse, sendHeroMessage };
 }
 
 function useVapiVoice() {
@@ -607,6 +641,7 @@ function GlowyChat() {
 
   async function sendMessage(event) {
     event?.preventDefault();
+    stopAmbientAudio();
     const trimmed = text.trim();
     if (!trimmed || loading) return;
 
@@ -622,8 +657,8 @@ function GlowyChat() {
         body: JSON.stringify({ conversationId, message: trimmed }),
       });
 
-      if (!response.ok) throw new Error("Unable to reach Glowy.");
-      const data = await response.json();
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.error || "Unable to reach Glowy.");
 
       if (data.conversationId && data.conversationId !== conversationId) {
         setConversationId(data.conversationId);
@@ -633,13 +668,14 @@ function GlowyChat() {
       setIntake(data.intake || {});
       setMessages([...nextMessages, { role: "assistant", content: data.reply }]);
     } catch (error) {
-      setMessages([...nextMessages, { role: "assistant", content: "I could not connect just now. Please try again in a moment." }]);
+      setMessages([...nextMessages, { role: "assistant", content: error.message || "I could not connect just now. Please try again in a moment." }]);
     } finally {
       setLoading(false);
     }
   }
 
   async function startVoiceCall() {
+    stopAmbientAudio();
     setVoiceStatus("connecting");
     try {
       const configResponse = await fetch(`/api/vapi/config${conversationId ? `?conversationId=${conversationId}` : ""}`);

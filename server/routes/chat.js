@@ -43,6 +43,13 @@ router.post("/", async (req, res, next) => {
       nextQuestion: nextQuestion?.key || null,
     });
   } catch (error) {
+    if (error.message?.startsWith("OpenAI request failed")) {
+      return res.status(502).json({
+        error: "Glowy reached the server, but OpenAI rejected the request. Check OPENAI_API_KEY, OPENAI_MODEL, and model access in Render.",
+        detail: error.message.slice(0, 600),
+      });
+    }
+
     next(error);
   }
 });
